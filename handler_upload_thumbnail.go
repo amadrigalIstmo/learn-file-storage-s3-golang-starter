@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/rand"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"mime"
@@ -42,23 +44,19 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 	}
 	defer file.Close()
 
-	mediaType := header.Header.Get("Content-Type")
-	if mediaType == "" {
-		respondWithError(w, http.StatusBadRequest, "Missing Content-Type for thumbnail", nil)
-		return
-	}
-
-	video, err := cfg.db.GetVideo(videoID)
+	mediaType, _, err := mime.ParseMediaType(header.Header.Get("Content-Type"))
 	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "Couldn't find video", err)
-		return
-	}
-	if video.UserID != userID {
-		respondWithError(w, http.StatusUnauthorized, "Not authorized to update this video", nil)
+		respondWithError(w, http.StatusBadRequest, "Invalid Content-Type", err)
 		return
 	}
 
-	// Obtener la extensión del archivo a partir del Content-Type
+	// Validar que el archivo es una imagen JPG o PNG
+	if mediaType != "image/jpeg" && mediaType != "image/png" {
+		respondWithError(w, http.StatusBadRequest, "Invalid file type", nil)
+		return
+	}
+
+	// Obtener la extensión del archivo según su tipo MIME
 	exts, _ := mime.ExtensionsByType(mediaType)
 	var ext string
 	if len(exts) > 0 {
@@ -68,9 +66,16 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	// Crear la ruta de almacenamiento
-	filename := fmt.Sprintf("%s%s", videoID, ext)
-	filePath := filepath.Join(cfg.assetsRoot, filename)
+	// Generar un nombre de archivo aleatorio de 32 bytes en Base64 URL safe
+	randomBytes := make([]byte, 32)
+	_, err = rand.Read(randomBytes)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Error generating random file name", err)
+		return
+	}
+
+	randomFileName := base64.RawURLEncoding.EncodeToString(randomBytes) + ext
+	filePath := filepath.Join(cfg.assetsRoot, randomFileName)
 
 	// Guardar el archivo en disco
 	dst, err := os.Create(filePath)
@@ -86,11 +91,22 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	// Generar la URL pública
-	thumbnailURL := fmt.Sprintf("http://localhost:%s/assets/%s", cfg.port, filename)
+	// Obtener el video para actualizar la URL de la miniatura
+	video, err := cfg.db.GetVideo(videoID)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Couldn't find video", err)
+		return
+	}
+	if video.UserID != userID {
+		respondWithError(w, http.StatusUnauthorized, "Not authorized to update this video", nil)
+		return
+	}
+
+	// Generar la URL de la miniatura con el nuevo archivo
+	thumbnailURL := fmt.Sprintf("http://localhost:%s/assets/%s", cfg.port, randomFileName)
 	video.ThumbnailURL = &thumbnailURL
 
-	// Actualizar la base de datos
+	// Actualizar la base de datos con la nueva URL
 	err = cfg.db.UpdateVideo(video)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Couldn't update video", err)
