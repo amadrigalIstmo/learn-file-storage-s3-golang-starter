@@ -4,5 +4,5 @@ out
 assets/
 samples/
 .air.toml
-tmp
+tmp/
 tubley.db
